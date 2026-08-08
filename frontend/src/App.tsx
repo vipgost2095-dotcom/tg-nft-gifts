@@ -1,75 +1,15 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTonAddress, useTonConnectUI } from '@tonconnect/ui-react';
 import { useTranslation } from 'react-i18next';
+import { drawGiftFrame, rollTraits, GiftTraits } from './nftArt';
+import { encodeGif, gifToDataUrl } from './gifEncoder';
 
 const COLLECTION_ADDRESS = import.meta.env.VITE_COLLECTION_ADDRESS as string;
 
-// ---- procedural "gift" image generator ---------------------------------
-// Draws a unique glassmorphism-style card each time. No external AI API
-// needed to get a working generator; swap generateImage() for a call to
-// your own image-gen backend endpoint later if you want real AI art.
-function generateImage(canvas: HTMLCanvasElement) {
-  const ctx = canvas.getContext('2d')!;
-  const W = canvas.width;
-  const H = canvas.height;
+const CANVAS_SIZE = 512;       // resolution of the minted GIF
+const PREVIEW_FRAMES = 24;     // frames baked into the looping GIF (~2s loop at 12fps)
+const FRAME_DELAY_CS = 6;      // 60ms per frame ≈ 16fps, small file size
 
-  const palettes = [
-    ['#ff6ec4', '#7873f5'],
-    ['#00c6ff', '#0072ff'],
-    ['#f7971e', '#ffd200'],
-    ['#f857a6', '#ff5858'],
-    ['#43cea2', '#185a9d'],
-    ['#ee0979', '#ff6a00'],
-  ];
-  const [c1, c2] = palettes[Math.floor(Math.random() * palettes.length)];
-
-  const grad = ctx.createLinearGradient(0, 0, W, H);
-  grad.addColorStop(0, c1);
-  grad.addColorStop(1, c2);
-  ctx.fillStyle = grad;
-  ctx.fillRect(0, 0, W, H);
-
-  // soft glass circles
-  for (let i = 0; i < 6; i++) {
-    ctx.beginPath();
-    const r = 40 + Math.random() * 120;
-    ctx.arc(Math.random() * W, Math.random() * H, r, 0, Math.PI * 2);
-    ctx.fillStyle = `rgba(255,255,255,${0.05 + Math.random() * 0.1})`;
-    ctx.fill();
-  }
-
-  // center glass panel
-  const pad = W * 0.12;
-  ctx.fillStyle = 'rgba(255,255,255,0.15)';
-  roundRect(ctx, pad, pad, W - pad * 2, H - pad * 2, 32);
-  ctx.fill();
-  ctx.strokeStyle = 'rgba(255,255,255,0.35)';
-  ctx.lineWidth = 2;
-  roundRect(ctx, pad, pad, W - pad * 2, H - pad * 2, 32);
-  ctx.stroke();
-
-  const seed = Math.random().toString(36).slice(2, 8).toUpperCase();
-  ctx.fillStyle = 'rgba(255,255,255,0.9)';
-  ctx.font = 'bold 28px sans-serif';
-  ctx.textAlign = 'center';
-  ctx.fillText('GIFT', W / 2, H / 2 - 10);
-  ctx.font = '16px sans-serif';
-  ctx.fillText(`#${seed}`, W / 2, H / 2 + 20);
-
-  return { dataUrl: canvas.toDataURL('image/png'), seed };
-}
-
-function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
-  ctx.beginPath();
-  ctx.moveTo(x + r, y);
-  ctx.arcTo(x + w, y, x + w, y + h, r);
-  ctx.arcTo(x + w, y + h, x, y + h, r);
-  ctx.arcTo(x, y + h, x, y, r);
-  ctx.arcTo(x, y, x + w, y, r);
-  ctx.closePath();
-}
-
-// polling: Getgems mints async, so we wait for status "ready"
 async function pollMintStatus(backendUrl: string, requestId: string, tries = 20): Promise<any> {
   for (let i = 0; i < tries; i++) {
     const res = await fetch(`${backendUrl}/api/mint/${requestId}`);
@@ -87,30 +27,75 @@ export default function App() {
   const userAddress = useTonAddress();
   const [tonConnectUI] = useTonConnectUI();
 
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
-  const [isGenerating, setIsGenerating] = useState(false);
+  const liveCanvasRef = useRef<HTMLCanvasElement>(null);
+  const rafRef = useRef<number>();
+  const traitsRef = useRef<GiftTraits>(rollTraits());
+
+  const [traits, setTraits] = useState<GiftTraits>(traitsRef.current);
+  const [gifDataUrl, setGifDataUrl] = useState<string | null>(null);
+  const [isRendering, setIsRendering] = useState(false);
+  const [isMinting, setIsMinting] = useState(false);
   const [statusText, setStatusText] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [generatedNft, setGeneratedNft] = useState<string | null>(null);
 
-  const handlePreview = useCallback(() => {
-    const canvas = canvasRef.current;
+  // live-animate the preview canvas continuously (cheap — just a redraw, no GIF work)
+  useEffect(() => {
+    const canvas = liveCanvasRef.current;
     if (!canvas) return;
-    const { dataUrl } = generateImage(canvas);
-    setPreviewUrl(dataUrl);
+    const ctx = canvas.getContext('2d')!;
+    const start = performance.now();
+
+    const loop = (now: number) => {
+      const t = ((now - start) / 2400) % 1; // 2.4s loop
+      drawGiftFrame(ctx, canvas.width, canvas.height, traitsRef.current, t);
+      rafRef.current = requestAnimationFrame(loop);
+    };
+    rafRef.current = requestAnimationFrame(loop);
+    return () => cancelAnimationFrame(rafRef.current!);
+  }, [traits]);
+
+  const handleReroll = useCallback(() => {
+    traitsRef.current = rollTraits();
+    setTraits(traitsRef.current);
+    setGifDataUrl(null);
     setGeneratedNft(null);
     setError(null);
   }, []);
 
-  const handleMint = async () => {
-    if (!userAddress) return;
-    if (!previewUrl) {
-      setError('Generate an image first');
-      return;
-    }
+  const handleRenderGif = useCallback(async () => {
+    setIsRendering(true);
+    setError(null);
+    try {
+      // render frames off-screen at full mint resolution
+      const off = document.createElement('canvas');
+      off.width = CANVAS_SIZE;
+      off.height = CANVAS_SIZE;
+      const octx = off.getContext('2d')!;
 
-    setIsGenerating(true);
+      const frames = [];
+      for (let i = 0; i < PREVIEW_FRAMES; i++) {
+        const t = i / PREVIEW_FRAMES;
+        drawGiftFrame(octx, CANVAS_SIZE, CANVAS_SIZE, traitsRef.current, t);
+        frames.push({ imageData: octx.getImageData(0, 0, CANVAS_SIZE, CANVAS_SIZE), delayCs: FRAME_DELAY_CS });
+        // yield to the browser so the tab doesn't freeze on slower phones
+        if (i % 4 === 3) await new Promise((r) => setTimeout(r, 0));
+      }
+
+      const bytes = encodeGif(CANVAS_SIZE, CANVAS_SIZE, frames);
+      setGifDataUrl(gifToDataUrl(bytes));
+    } catch (e: any) {
+      console.error(e);
+      setError('Failed to render animation: ' + e.message);
+    } finally {
+      setIsRendering(false);
+    }
+  }, []);
+
+  const handleMint = async () => {
+    if (!userAddress || !gifDataUrl) return;
+
+    setIsMinting(true);
     setError(null);
     setStatusText(t('generating'));
 
@@ -123,9 +108,14 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           userAddress,
-          image: previewUrl,
-          name: 'Exclusive Gift',
+          image: gifDataUrl,
+          name: `Exclusive Gift #${traits.editionSeed}`,
           description: 'Generated with TG NFT Gift Generator',
+          attributes: [
+            { trait_type: 'Backdrop', value: traits.backdrop.join(' / '), rarity: `${traits.backdropRarity}%` },
+            { trait_type: 'Model', value: traits.model, rarity: `${traits.modelRarity}%` },
+            { trait_type: 'Symbol', value: traits.symbol, rarity: `${traits.symbolRarity}%` },
+          ],
         }),
       });
 
@@ -146,32 +136,45 @@ export default function App() {
       console.error(e);
       setError(e.message || 'Mint failed. Check logs.');
     } finally {
-      setIsGenerating(false);
+      setIsMinting(false);
       setStatusText(null);
     }
   };
 
   return (
-    <div className="min-h-screen flex flex-col items-center justify-center gap-6 px-4 py-10 text-center">
+    <div className="min-h-screen flex flex-col items-center justify-center gap-5 px-4 py-10 text-center">
       <h1 className="text-2xl font-bold">{t('title')}</h1>
       <p className="text-white/70">{t('subtitle')}</p>
 
-      <canvas ref={canvasRef} width={512} height={512} className="hidden" />
+      <div className="w-64 h-64 rounded-3xl overflow-hidden border border-white/20 shadow-xl">
+        <canvas ref={liveCanvasRef} width={300} height={300} className="w-full h-full" />
+      </div>
 
-      {previewUrl ? (
-        <img src={previewUrl} alt="preview" className="w-64 h-64 rounded-2xl object-cover border border-white/20" />
-      ) : (
-        <div className="w-64 h-64 rounded-2xl border border-dashed border-white/30 flex items-center justify-center text-white/40">
-          No preview yet
-        </div>
+      <div className="text-xs text-white/50 flex gap-3">
+        <span>Backdrop {traits.backdropRarity}%</span>
+        <span>Model: {traits.model} ({traits.modelRarity}%)</span>
+        <span>Symbol: {traits.symbol} ({traits.symbolRarity}%)</span>
+      </div>
+
+      <div className="flex gap-3">
+        <button
+          onClick={handleReroll}
+          className="px-5 py-3 rounded-xl bg-white/10 border border-white/20 hover:bg-white/20 transition"
+        >
+          🎲 Reroll
+        </button>
+        <button
+          onClick={handleRenderGif}
+          disabled={isRendering}
+          className="px-5 py-3 rounded-xl bg-white/10 border border-white/20 hover:bg-white/20 disabled:opacity-50 transition"
+        >
+          {isRendering ? 'Rendering…' : '✨ Render animation'}
+        </button>
+      </div>
+
+      {gifDataUrl && (
+        <img src={gifDataUrl} alt="minted preview" className="w-48 h-48 rounded-2xl border border-white/20" />
       )}
-
-      <button
-        onClick={handlePreview}
-        className="px-6 py-3 rounded-xl bg-white/10 border border-white/20 hover:bg-white/20 transition"
-      >
-        Generate preview
-      </button>
 
       {!userAddress ? (
         <button
@@ -183,10 +186,10 @@ export default function App() {
       ) : (
         <button
           onClick={handleMint}
-          disabled={isGenerating || !previewUrl}
+          disabled={isMinting || !gifDataUrl}
           className="px-6 py-3 rounded-xl bg-emerald-500 hover:bg-emerald-600 disabled:opacity-50 transition font-medium"
         >
-          {isGenerating ? (statusText || t('generating')) : t('mint_button')}
+          {isMinting ? (statusText || t('generating')) : t('mint_button')}
         </button>
       )}
 
