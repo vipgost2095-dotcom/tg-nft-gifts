@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { useState, useEffect } from 'react';
 import { Sparkles, Globe, Check, AlertCircle, Loader2 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import { beginCell } from '@ton/core'; // <-- Добавлен импорт для создания payload
+import { beginCell, Address } from '@ton/core'; // <-- Добавлен импорт Address
 import './i18n';
 
 // Адрес вашей коллекции (берется из переменных Railway)
@@ -61,25 +61,28 @@ export default function App() {
       }
 
       // 2. Формируем ПРАВИЛЬНЫЙ payload для минта
-      // OpCode 0x595f07bc - стандартная команда mint для многих коллекций TON
       const MINT_PRICE = '10000000'; // 0.01 TON в нанотонах
       const GAS_FEE = '20000000';    // 0.02 TON на газ
       
-      // Создаем тело сообщения (payload)
+      // ИСПРАВЛЕНИЕ: Конвертируем адрес из URL-safe формата (с дефисами) в стандартный base64
+      // useTonAddress() возвращает формат UQ...-..., а @ton/core требует EQ...+...
+      const safeAddress = userAddress.replace(/-/g, '+').replace(/_/g, '/');
+      
+      // Создаем тело сообщения (payload) с правильным объектом Address
       const mintBody = beginCell()
         .storeUint(0x595f07bc, 32) // op::mint (стандартный opcode)
         .storeUint(0, 64)          // query_id
-        .storeAddress(userAddress) // адрес владельца NFT
+        .storeAddress(Address.parse(safeAddress)) // <-- Теперь используем правильный парсинг
         .endCell();
 
-      // 3. Отправляем транзакцию с payload
+      // 3. Отправляем транзакцию
       await tonConnectUI.sendTransaction({
         validUntil: Math.floor(Date.now() / 1000) + 300,
         messages: [
           {
             address: COLLECTION_ADDRESS,
             amount: (BigInt(MINT_PRICE) + BigInt(GAS_FEE)).toString(),
-            payload: mintBody.toBoc().toString('base64') // <-- Конвертируем в base64
+            payload: mintBody.toBoc().toString('base64')
           }
         ]
       });
