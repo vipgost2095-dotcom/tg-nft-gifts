@@ -35,8 +35,8 @@ fs.mkdirSync(IMAGES_DIR, { recursive: true });
 app.use('/images', express.static(IMAGES_DIR));
 
 function saveBase64Image(dataUrl) {
-  const match = /^data:image\/(png|jpeg|jpg);base64,(.+)$/.exec(dataUrl || '');
-  if (!match) throw new Error('image must be a base64 data URL (png or jpeg)');
+  const match = /^data:image\/(png|jpeg|jpg|gif);base64,(.+)$/.exec(dataUrl || '');
+  if (!match) throw new Error('image must be a base64 data URL (png, jpeg, or gif)');
   const ext = match[1] === 'jpg' ? 'jpeg' : match[1];
   const buffer = Buffer.from(match[2], 'base64');
   if (buffer.length > 8 * 1024 * 1024) throw new Error('image too large (max 8MB)');
