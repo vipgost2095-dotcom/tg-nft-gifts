@@ -13,7 +13,7 @@ if (window.Telegram?.WebApp) {
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
-    <TonConnectUIProvider manifestUrl=" <TonConnectUIProvider manifestUrl="https://hospitable-adaptation-production-ad21.up.railway.app/tonconnect-manifest.json">
+    <TonConnectUIProvider manifestUrl="https://hospitable-adaptation-production-ad21.up.railway.app/tonconnect-manifest.json">
       <App />
     </TonConnectUIProvider>
   </React.StrictMode>
