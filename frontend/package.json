@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "@ton/core": "^0.56.0",
+    "@tonconnect/ui-react": "^2.0.9",
     "framer-motion": "^11.0.0",
     "i18next": "^23.7.0",
     "lucide-react": "^0.300.0",
