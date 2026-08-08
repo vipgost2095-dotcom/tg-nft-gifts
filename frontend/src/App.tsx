@@ -1,7 +1,7 @@
 import { TonConnectButton, useTonAddress, useTonConnectUI } from '@tonconnect/ui-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useState, useEffect } from 'react';
-import { Sparkles, Globe, Check, AlertCircle } from 'lucide-react';
+import { Sparkles, Globe, Check, AlertCircle, Loader2 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import './i18n';
 
@@ -33,7 +33,7 @@ export default function App() {
   const handleMint = async () => {
     if (!userAddress) return;
     if (!COLLECTION_ADDRESS) {
-      alert('Collection address not configured!');
+      alert('Collection address not configured! Please check VITE_COLLECTION_ADDRESS in Railway.');
       return;
     }
     
@@ -41,10 +41,10 @@ export default function App() {
     setError(null);
 
     try {
-      // 1. Запрашиваем метаданные у бэкенда
+      // 1. Запрашиваем метаданные у бэкенда (опционально, для логики)
       const backendUrl = import.meta.env.VITE_BACKEND_URL;
       
-      // Если бэкенд не настроен, используем заглушку для теста
+      // Если бэкенд не настроен или недоступен, используем заглушку для теста
       let metadataUrl = 'https://api.dicebear.com/9.x/glass/svg?seed=' + userAddress.slice(0,6);
       
       if (backendUrl) {
@@ -62,11 +62,10 @@ export default function App() {
       }
 
       // 2. Формируем транзакцию
-      // Для стандартной коллекции GetGems/minter.ton.org часто достаточно просто перевести TON
-      // или отправить сообщение с op::mint (0x18). 
-      // Здесь используем простой перевод с комментарием "mint" для надежности.
+      // ИСПРАВЛЕНИЕ: Убрано поле payload, так как пустая строка вызывает ошибку валидации SDK.
+      // Для стандартного минта достаточно перевести нужную сумму TON на адрес коллекции.
       
-      const MINT_PRICE = '10000000'; // 0.01 TON в нанотонах (как на кнопке)
+      const MINT_PRICE = '10000000'; // 0.01 TON в нанотонах
       const GAS_FEE = '20000000';    // 0.02 TON на газ
       
       await tonConnectUI.sendTransaction({
@@ -74,15 +73,13 @@ export default function App() {
         messages: [
           {
             address: COLLECTION_ADDRESS,
-            amount: (BigInt(MINT_PRICE) + BigInt(GAS_FEE)).toString(),
-            // Пытаемся использовать стандартный payload для минта, если коллекция поддерживает
-            // Если нет - можно оставить пустым '' и просто перевести деньги
-            payload: '' 
+            amount: (BigInt(MINT_PRICE) + BigInt(GAS_FEE)).toString()
+            // Поле payload полностью удалено для избежания ошибки "Invalid payload"
           }
         ]
       });
       
-      // 3. Успех
+      // 3. Успех - показываем экран успеха через небольшую задержку
       setTimeout(() => {
         setGeneratedNft(`https://getgems.io/collection/${COLLECTION_ADDRESS}`);
         setIsGenerating(false);
@@ -90,11 +87,11 @@ export default function App() {
 
     } catch (e: any) {
       console.error(e);
-      // Обработка отмены пользователем
+      // Обработка отмены пользователем или других ошибок
       if (e?.message?.includes('canceled') || e?.code === 100) {
-        setError(t('tx_canceled'));
+        setError(t('tx_canceled') || 'Transaction was canceled by user');
       } else {
-        setError(e?.message || t('tx_error'));
+        setError(e?.message || t('tx_error') || 'Transaction failed');
       }
       setIsGenerating(false);
     }
@@ -143,11 +140,7 @@ export default function App() {
                 {/* Preview Placeholder */}
                 <div className="aspect-square w-full bg-gradient-to-br from-white/5 to-transparent rounded-2xl border border-white/5 mb-8 flex items-center justify-center relative overflow-hidden group">
                   {isGenerating ? (
-                    <motion.div 
-                      animate={{ rotate: 360 }}
-                      transition={{ duration: 2, repeat: Infinity, ease: "linear" }}
-                      className="w-12 h-12 border-2 border-blue-500 border-t-transparent rounded-full"
-                    />
+                    <Loader2 className="w-12 h-12 text-blue-500 animate-spin" />
                   ) : (
                     <Sparkles className="w-16 h-16 text-white/20 group-hover:text-blue-400 transition-colors duration-500" />
                   )}
