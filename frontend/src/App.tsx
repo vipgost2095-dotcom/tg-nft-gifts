@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { useState, useEffect } from 'react';
 import { Sparkles, Globe, Check, AlertCircle, Loader2 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+import { beginCell } from '@ton/core'; // <-- Добавлен импорт для создания payload
 import './i18n';
 
 // Адрес вашей коллекции (берется из переменных Railway)
@@ -41,10 +42,8 @@ export default function App() {
     setError(null);
 
     try {
-      // 1. Запрашиваем метаданные у бэкенда (опционально, для логики)
+      // 1. Запрашиваем метаданные у бэкенда (опционально)
       const backendUrl = import.meta.env.VITE_BACKEND_URL;
-      
-      // Если бэкенд не настроен или недоступен, используем заглушку для теста
       let metadataUrl = 'https://api.dicebear.com/9.x/glass/svg?seed=' + userAddress.slice(0,6);
       
       if (backendUrl) {
@@ -61,25 +60,31 @@ export default function App() {
         }
       }
 
-      // 2. Формируем транзакцию
-      // ИСПРАВЛЕНИЕ: Убрано поле payload, так как пустая строка вызывает ошибку валидации SDK.
-      // Для стандартного минта достаточно перевести нужную сумму TON на адрес коллекции.
-      
+      // 2. Формируем ПРАВИЛЬНЫЙ payload для минта
+      // OpCode 0x595f07bc - стандартная команда mint для многих коллекций TON
       const MINT_PRICE = '10000000'; // 0.01 TON в нанотонах
       const GAS_FEE = '20000000';    // 0.02 TON на газ
       
+      // Создаем тело сообщения (payload)
+      const mintBody = beginCell()
+        .storeUint(0x595f07bc, 32) // op::mint (стандартный opcode)
+        .storeUint(0, 64)          // query_id
+        .storeAddress(userAddress) // адрес владельца NFT
+        .endCell();
+
+      // 3. Отправляем транзакцию с payload
       await tonConnectUI.sendTransaction({
         validUntil: Math.floor(Date.now() / 1000) + 300,
         messages: [
           {
             address: COLLECTION_ADDRESS,
-            amount: (BigInt(MINT_PRICE) + BigInt(GAS_FEE)).toString()
-            // Поле payload полностью удалено для избежания ошибки "Invalid payload"
+            amount: (BigInt(MINT_PRICE) + BigInt(GAS_FEE)).toString(),
+            payload: mintBody.toBoc().toString('base64') // <-- Конвертируем в base64
           }
         ]
       });
       
-      // 3. Успех - показываем экран успеха через небольшую задержку
+      // 4. Успех
       setTimeout(() => {
         setGeneratedNft(`https://getgems.io/collection/${COLLECTION_ADDRESS}`);
         setIsGenerating(false);
