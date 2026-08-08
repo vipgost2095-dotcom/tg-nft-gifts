@@ -8,8 +8,10 @@ app.use(express.json());
 
 const API_KEY = process.env.GETGEMS_API_KEY;
 const COLLECTION_ADDR = process.env.COLLECTION_ADDRESS;
-// Используем основной GraphQL endpoint GetGems
-const GRAPHQL_URL = 'https://api.getgems.io/graphql';
+
+// Правильный endpoint для создания элементов в cNFT коллекции
+// Формат: POST /api/v2/collections/{address}/items
+const MINT_URL = `https://api.getgems.io/api/v2/collections/${COLLECTION_ADDR}/items`;
 
 app.post('/api/mint', async (req, res) => {
   try {
@@ -20,68 +22,54 @@ app.post('/api/mint', async (req, res) => {
       throw new Error('Missing required fields');
     }
 
-    // GraphQL мутация для создания элемента коллекции
-    // Примечание: Точное имя мутации может отличаться. 
-    // Часто используется 'mintNft' или 'createCollectionItem'.
-    // Попробуем стандартную структуру.
-    const query = `
-      mutation MintNft($input: MintNftInput!) {
-        mintNft(input: $input) {
-          ok
-          nftItem {
-            address
-          }
-        }
-      }
-    `;
-
-    const variables = {
-      input: {
-        collectionAddress: COLLECTION_ADDR,
-        ownerAddress: userAddress,
-        metadata: {
-          name: `TG Gift #${Math.floor(Math.random() * 9999)}`,
-          description: "Exclusive digital gift from TG Giftverse",
-          image: `https://api.dicebear.com/9.x/glass/svg?seed=${userAddress}`
-        }
+    // Формат payload для cNFT (REST API)
+    const payload = {
+      owner_address: userAddress,
+      metadata: {
+        name: `TG Gift #${Math.floor(Math.random() * 9999)}`,
+        description: "Exclusive digital gift from TG Giftverse",
+        image: `https://api.dicebear.com/9.x/glass/svg?seed=${userAddress}`
       }
     };
 
-    console.log('Sending to:', GRAPHQL_URL);
+    console.log('Sending to:', MINT_URL);
+    console.log('Payload:', JSON.stringify(payload));
     
-    const response = await fetch(GRAPHQL_URL, {
+    const response = await fetch(MINT_URL, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${API_KEY}`,
         'X-API-Key': API_KEY,
-        'User-Agent': 'Mozilla/5.0 (compatible; TG-GiftBot/1.0)' // Добавляем UA, чтобы не блокировали
+        'User-Agent': 'Mozilla/5.0 (compatible; TG-GiftBot/1.0)'
       },
-      body: JSON.stringify({ query, variables })
+      body: JSON.stringify(payload)
     });
 
     console.log('Response Status:', response.status);
     const contentType = response.headers.get("content-type");
     console.log('Content-Type:', contentType);
 
-    // КРИТИЧЕСКАЯ ПРОВЕРКА: Если ответ не JSON, читаем как текст и логируем
-    if (!contentType || !contentType.includes("application/json")) {
-      const textBody = await response.text();
-      console.error('Received non-JSON response:', textBody.substring(0, 500)); // Логируем первые 500 символов
-      throw new Error(`API returned HTML instead of JSON. Status: ${response.status}`);
+    // Проверяем, пришел ли JSON
+    let result;
+    if (contentType && contentType.includes("application/json")) {
+      result = await response.json();
+    } else {
+      const text = await response.text();
+      console.error('Non-JSON response:', text.substring(0, 500));
+      throw new Error(`API returned non-JSON. Status: ${response.status}`);
     }
 
-    const result = await response.json();
-    console.log('GraphQL Response:', JSON.stringify(result));
+    console.log('API Response:', JSON.stringify(result));
 
-    if (result.errors) {
-      console.error('GraphQL Errors:', result.errors);
-      throw new Error(result.errors[0].message || 'GraphQL Error');
+    if (!response.ok) {
+      throw new Error(result.message || result.error || `HTTP ${response.status}`);
     }
 
-    const nftAddress = result.data?.mintNft?.nftItem?.address;
+    // REST API возвращает объект созданного элемента
+    const nftAddress = result.address || result.nft_address || result.item?.address;
     if (!nftAddress) {
-      throw new Error('No NFT address in response data');
+      throw new Error('No NFT address in response');
     }
 
     res.json({ success: true, nftAddress });
