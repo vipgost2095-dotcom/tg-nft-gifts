@@ -1,14 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTonAddress, useTonConnectUI } from '@tonconnect/ui-react';
 import { useTranslation } from 'react-i18next';
-import { drawGiftFrame, rollTraits, GiftTraits } from './nftArt';
+import { drawPlaneFrame, rollTraits, PlaneTraits } from './plane3d';
 import { encodeGif, gifToDataUrl } from './gifEncoder';
 
 const COLLECTION_ADDRESS = import.meta.env.VITE_COLLECTION_ADDRESS as string;
 
 const CANVAS_SIZE = 512;       // resolution of the minted GIF
-const PREVIEW_FRAMES = 24;     // frames baked into the looping GIF (~2s loop at 12fps)
-const FRAME_DELAY_CS = 6;      // 60ms per frame ≈ 16fps, small file size
+const PREVIEW_FRAMES = 30;     // frames baked into the looping GIF (~2.5s loop)
+const FRAME_DELAY_CS = 5;      // 50ms per frame ≈ 20fps
 
 async function pollMintStatus(backendUrl: string, requestId: string, tries = 20): Promise<any> {
   for (let i = 0; i < tries; i++) {
@@ -29,9 +29,9 @@ export default function App() {
 
   const liveCanvasRef = useRef<HTMLCanvasElement>(null);
   const rafRef = useRef<number>();
-  const traitsRef = useRef<GiftTraits>(rollTraits());
+  const traitsRef = useRef<PlaneTraits>(rollTraits());
 
-  const [traits, setTraits] = useState<GiftTraits>(traitsRef.current);
+  const [traits, setTraits] = useState<PlaneTraits>(traitsRef.current);
   const [gifDataUrl, setGifDataUrl] = useState<string | null>(null);
   const [isRendering, setIsRendering] = useState(false);
   const [isMinting, setIsMinting] = useState(false);
@@ -39,7 +39,7 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [generatedNft, setGeneratedNft] = useState<string | null>(null);
 
-  // live-animate the preview canvas continuously (cheap — just a redraw, no GIF work)
+  // live-animate the preview canvas continuously
   useEffect(() => {
     const canvas = liveCanvasRef.current;
     if (!canvas) return;
@@ -47,8 +47,8 @@ export default function App() {
     const start = performance.now();
 
     const loop = (now: number) => {
-      const t = ((now - start) / 2400) % 1; // 2.4s loop
-      drawGiftFrame(ctx, canvas.width, canvas.height, traitsRef.current, t);
+      const t = ((now - start) / 3000) % 1; // 3s loop
+      drawPlaneFrame(ctx, canvas.width, canvas.height, traitsRef.current, t);
       rafRef.current = requestAnimationFrame(loop);
     };
     rafRef.current = requestAnimationFrame(loop);
@@ -67,7 +67,6 @@ export default function App() {
     setIsRendering(true);
     setError(null);
     try {
-      // render frames off-screen at full mint resolution
       const off = document.createElement('canvas');
       off.width = CANVAS_SIZE;
       off.height = CANVAS_SIZE;
@@ -76,9 +75,8 @@ export default function App() {
       const frames = [];
       for (let i = 0; i < PREVIEW_FRAMES; i++) {
         const t = i / PREVIEW_FRAMES;
-        drawGiftFrame(octx, CANVAS_SIZE, CANVAS_SIZE, traitsRef.current, t);
+        drawPlaneFrame(octx, CANVAS_SIZE, CANVAS_SIZE, traitsRef.current, t);
         frames.push({ imageData: octx.getImageData(0, 0, CANVAS_SIZE, CANVAS_SIZE), delayCs: FRAME_DELAY_CS });
-        // yield to the browser so the tab doesn't freeze on slower phones
         if (i % 4 === 3) await new Promise((r) => setTimeout(r, 0));
       }
 
@@ -109,12 +107,11 @@ export default function App() {
         body: JSON.stringify({
           userAddress,
           image: gifDataUrl,
-          name: `Exclusive Gift #${traits.editionSeed}`,
+          name: `${traits.material.name} Plane #${traits.editionSeed}`,
           description: 'Generated with TG NFT Gift Generator',
           attributes: [
-            { trait_type: 'Backdrop', value: traits.backdrop.join(' / '), rarity: `${traits.backdropRarity}%` },
-            { trait_type: 'Model', value: traits.model, rarity: `${traits.modelRarity}%` },
-            { trait_type: 'Symbol', value: traits.symbol, rarity: `${traits.symbolRarity}%` },
+            { trait_type: 'Material', value: traits.material.name, rarity: `${traits.materialRarity}%` },
+            { trait_type: 'Movement', value: traits.movement, rarity: `${traits.movementRarity}%` },
           ],
         }),
       });
@@ -151,9 +148,8 @@ export default function App() {
       </div>
 
       <div className="text-xs text-white/50 flex gap-3">
-        <span>Backdrop {traits.backdropRarity}%</span>
-        <span>Model: {traits.model} ({traits.modelRarity}%)</span>
-        <span>Symbol: {traits.symbol} ({traits.symbolRarity}%)</span>
+        <span>{traits.material.name} ({traits.materialRarity}%)</span>
+        <span>{traits.movement} ({traits.movementRarity}%)</span>
       </div>
 
       <div className="flex gap-3">
