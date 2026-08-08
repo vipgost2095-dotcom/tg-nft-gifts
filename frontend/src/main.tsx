@@ -11,9 +11,13 @@ if (window.Telegram?.WebApp) {
   window.Telegram.WebApp.ready();
 }
 
+// manifest must live on the SAME domain this app is served from —
+// see frontend/public/tonconnect-manifest.json
+const manifestUrl = `${window.location.origin}/tonconnect-manifest.json`;
+
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
-    <TonConnectUIProvider manifestUrl="https://hospitable-adaptation-production-ad21.up.railway.app/tonconnect-manifest.json">
+    <TonConnectUIProvider manifestUrl={manifestUrl}>
       <App />
     </TonConnectUIProvider>
   </React.StrictMode>
