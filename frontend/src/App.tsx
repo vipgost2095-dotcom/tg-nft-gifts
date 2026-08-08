@@ -1,18 +1,16 @@
-import { TonConnectButton, useTonAddress, useTonConnectUI } from '@tonconnect/ui-react';
+import { TonConnectButton, useTonAddress } from '@tonconnect/ui-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useState, useEffect } from 'react';
 import { Sparkles, Globe, Check, AlertCircle, Loader2 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import { beginCell, Address } from '@ton/core'; // <-- Добавлен импорт Address
 import './i18n';
 
-// Адрес вашей коллекции (берется из переменных Railway)
+// Адрес коллекции (используется для ссылки на GetGems)
 const COLLECTION_ADDRESS = import.meta.env.VITE_COLLECTION_ADDRESS || '';
 
 export default function App() {
   const { t, i18n } = useTranslation();
   const userAddress = useTonAddress();
-  const [tonConnectUI] = useTonConnectUI();
   
   // Состояния UI
   const [isGenerating, setIsGenerating] = useState(false);
@@ -33,74 +31,50 @@ export default function App() {
 
   const handleMint = async () => {
     if (!userAddress) return;
-    if (!COLLECTION_ADDRESS) {
-      alert('Collection address not configured! Please check VITE_COLLECTION_ADDRESS in Railway.');
-      return;
-    }
     
     setIsGenerating(true);
     setError(null);
 
     try {
-      // 1. Запрашиваем метаданные у бэкенда (опционально)
       const backendUrl = import.meta.env.VITE_BACKEND_URL;
-      let metadataUrl = 'https://api.dicebear.com/9.x/glass/svg?seed=' + userAddress.slice(0,6);
       
-      if (backendUrl) {
-        try {
-          const response = await fetch(`${backendUrl}/api/generate-metadata`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ userAddress, refCode })
-          });
-          const data = await response.json();
-          if (data.metadataUrl) metadataUrl = data.metadataUrl;
-        } catch (e) {
-          console.warn('Backend unavailable, using fallback metadata');
-        }
+      if (!backendUrl) {
+        throw new Error('Backend URL is not configured in Railway variables.');
       }
 
-      // 2. Формируем ПРАВИЛЬНЫЙ payload для минта
-      const MINT_PRICE = '10000000'; // 0.01 TON в нанотонах
-      const GAS_FEE = '20000000';    // 0.02 TON на газ
-      
-      // ИСПРАВЛЕНИЕ: Конвертируем адрес из URL-safe формата (с дефисами) в стандартный base64
-      // useTonAddress() возвращает формат UQ...-..., а @ton/core требует EQ...+...
-      const safeAddress = userAddress.replace(/-/g, '+').replace(/_/g, '/');
-      
-      // Создаем тело сообщения (payload) с правильным объектом Address
-      const mintBody = beginCell()
-        .storeUint(0x595f07bc, 32) // op::mint (стандартный opcode)
-        .storeUint(0, 64)          // query_id
-        .storeAddress(Address.parse(safeAddress)) // <-- Теперь используем правильный парсинг
-        .endCell();
-
-      // 3. Отправляем транзакцию
-      await tonConnectUI.sendTransaction({
-        validUntil: Math.floor(Date.now() / 1000) + 300,
-        messages: [
-          {
-            address: COLLECTION_ADDRESS,
-            amount: (BigInt(MINT_PRICE) + BigInt(GAS_FEE)).toString(),
-            payload: mintBody.toBoc().toString('base64')
-          }
-        ]
+      // Отправляем запрос на наш бэкенд для минта через API GetGems
+      const response = await fetch(`${backendUrl}/api/mint`, {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          'Accept': 'application/json'
+        },
+        body: JSON.stringify({ 
+          userAddress,
+          refCode 
+        })
       });
-      
-      // 4. Успех
+
+      const data = await response.json();
+
+      if (!response.ok || !data.success) {
+        throw new Error(data.error || data.details || 'Minting failed on server');
+      }
+
+      // Успех! Показываем экран успеха
+      // Используем адрес NFT, который вернул бэкенд, или адрес коллекции как запасной вариант
+      const nftLink = data.nftAddress 
+        ? `https://getgems.io/nft/${data.nftAddress}`
+        : `https://getgems.io/collection/${COLLECTION_ADDRESS}`;
+
       setTimeout(() => {
-        setGeneratedNft(`https://getgems.io/collection/${COLLECTION_ADDRESS}`);
+        setGeneratedNft(nftLink);
         setIsGenerating(false);
-      }, 2000);
+      }, 1500);
 
     } catch (e: any) {
-      console.error(e);
-      // Обработка отмены пользователем или других ошибок
-      if (e?.message?.includes('canceled') || e?.code === 100) {
-        setError(t('tx_canceled') || 'Transaction was canceled by user');
-      } else {
-        setError(e?.message || t('tx_error') || 'Transaction failed');
-      }
+      console.error('Mint error:', e);
+      setError(e.message || 'Transaction failed. Please try again.');
       setIsGenerating(false);
     }
   };
